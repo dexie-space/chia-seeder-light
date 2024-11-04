@@ -73,15 +73,16 @@ async fn process_peer(
         Ok(Ok((peer, ws_stream))) => {
             // Get more peers and collect them, only consider a peer up if we can get more peers from it
             if let Ok(response) = peer.request_peers().await {
-                println!("Adding reachable peer: {:?}", peer_addr);
-
                 // Add to DNS
                 authority.add_peer(peer.socket_addr()).await;
 
                 for peer_info in response.peer_list {
                     if let Ok(ip) = peer_info.host.parse() {
                         let addr = SocketAddr::new(ip, peer_info.port);
-                        new_peers.push(addr);
+                        // Only add peers that are on the same port as the peer we connected to, since we only provide ips over dns
+                        if addr.port() == peer_info.port {
+                            new_peers.push(addr);
+                        }
                     }
                 }
             }

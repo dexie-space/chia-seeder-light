@@ -33,6 +33,7 @@ impl RandomizedAuthority {
     pub async fn add_peer(&self, addr: SocketAddr) {
         let mut peers = self.peers.write().await;
         if !peers.contains(&addr) {
+            println!("Adding reachable peer: {:?}", addr);
             peers.push(addr);
         }
     }
