@@ -30,7 +30,7 @@ struct Opt {
         short,
         value_name = "ip",
         help = "Set listen address",
-        default_value = "0.0.0.0"
+        default_value = "[::]"
     )]
     address: String,
 
