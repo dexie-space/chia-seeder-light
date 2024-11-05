@@ -62,6 +62,7 @@ impl RandomizedAuthority {
 
     pub fn block_peer(&self, addr: SocketAddr, duration: Duration) {
         let mut blocked = self.blocked_peers.lock().unwrap();
+        blocked.retain(|peer| peer.addr != addr);
         blocked.push(BlockedPeer {
             addr,
             expires_at: Instant::now() + duration,
