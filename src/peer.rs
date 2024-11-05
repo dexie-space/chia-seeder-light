@@ -182,5 +182,7 @@ pub async fn start_peer_rechecker(
                 tasks.next().await;
             }
         }
+
+        info!("Periodic peer recheck finished");
     }
 }
