@@ -190,21 +190,24 @@ pub async fn start_peer_rechecker(
 ) -> anyhow::Result<()> {
     let processor = PeerProcessor::new(tls, authority.clone(), network_id, true);
 
-    sleep(RECHECK_INTERVAL).await;
-
     loop {
+        sleep(RECHECK_INTERVAL).await;
+
         let peers = authority.get_peers().await;
+        let peers_len = peers.len();
+        let processing_len = processor.processing.len();
+
         info!(
-            "Starting periodic peer recheck, checking {} reachable peers",
-            peers.len()
+            "Starting periodic peer recheck, {} reachable peers, {} processing",
+            peers_len, processing_len
         );
 
         authority.cleanup_blocklist();
 
-        for peer in peers {
-            processor.process(peer);
+        if processing_len < peers_len {
+            for peer in peers {
+                processor.process(peer);
+            }
         }
-
-        sleep(RECHECK_INTERVAL).await;
     }
 }
