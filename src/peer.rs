@@ -65,15 +65,17 @@ impl PeerProcessor {
                 recv_result = receiver.recv() => {
                     match recv_result {
                         Ok(peer) => {
-                            if tasks.len() < MAX_CONCURRENT_TASKS {
-                                if !is_recheck && authority.known_peer(&peer).await {
-                                    return;
-                                }
+                            if !is_recheck && authority.known_peer(&peer).await {
+                                continue;
+                            }
 
-                                if authority.is_blocked(&peer) {
-                                    debug!("Skipping blocked peer: {:?}", peer);
-                                    return;
-                                }
+                            if authority.is_blocked(&peer) {
+                                debug!("Skipping blocked peer: {:?}", peer);
+                                continue;
+                            }
+
+                            if tasks.len() < MAX_CONCURRENT_TASKS {
+
 
                                 tasks.push(Self::process_peer(
                                     peer,
