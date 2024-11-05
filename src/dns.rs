@@ -75,11 +75,6 @@ impl Authority for RandomizedAuthority {
             return Ok(AuthLookup::default());
         }
 
-        // Immediately return empty response for unsupported record types
-        if !matches!(rtype, RecordType::A | RecordType::AAAA) {
-            return Ok(AuthLookup::default());
-        }
-
         let peers = self.peers.read().await;
         let mut filtered_peers: Vec<_> = match rtype {
             RecordType::A => peers
@@ -90,8 +85,7 @@ impl Authority for RandomizedAuthority {
                 .iter()
                 .filter(|&&addr| matches!(addr.ip(), std::net::IpAddr::V6(_)))
                 .collect(),
-            RecordType::ANY => peers.iter().collect(),
-            _ => Vec::new(),
+            _ => Vec::new(), // empty for unsupported record types
         };
 
         // Shuffle the filtered peers

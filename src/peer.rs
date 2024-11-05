@@ -45,13 +45,12 @@ pub fn start_peer_crawler(
 
             while active_tasks.len() < MAX_CONCURRENT_TASKS {
                 if let Some(peer) = peers_to_process.pop_front() {
-                    // Check if peer is blocked before processing
-                    let is_blocked = {
-                        let blocklist = blocked_peers.lock().unwrap();
-                        blocklist.iter().any(|bp| bp.addr == peer)
-                    };
-
-                    if is_blocked {
+                    if blocked_peers
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .any(|bp| bp.addr == peer)
+                    {
                         debug!("Skipping blocked peer: {:?}", peer);
                         continue;
                     }
@@ -86,6 +85,41 @@ pub fn start_peer_crawler(
     })
 }
 
+async fn handle_peer_connection(
+    addr: SocketAddr,
+    tls: Arc<Connector>,
+    authority: Arc<RandomizedAuthority>,
+    network_id: String,
+) -> Result<Vec<SocketAddr>, ()> {
+    let result = timeout(
+        Duration::from_secs(PEER_TIMEOUT),
+        connect_peer(network_id, (*tls).clone(), addr),
+    )
+    .await;
+
+    match result {
+        Ok(Ok((peer, ws_stream))) => {
+            let mut new_peers = Vec::new();
+            if let Ok(response) = peer.request_peers().await {
+                authority.add_peer(peer.socket_addr()).await;
+
+                for peer_info in response.peer_list {
+                    if let Ok(ip) = peer_info.host.parse() {
+                        // Only add peers that are on the same port as the peer we connect to
+                        if addr.port() == peer_info.port {
+                            new_peers.push(SocketAddr::new(ip, peer_info.port));
+                        }
+                    }
+                }
+            }
+            drop(ws_stream);
+            drop(peer);
+            Ok(new_peers)
+        }
+        _ => Err(()),
+    }
+}
+
 async fn process_peer(
     peer_addr: SocketAddr,
     tls: Arc<Connector>,
@@ -93,41 +127,17 @@ async fn process_peer(
     network_id: String,
     blocked_peers: Arc<Mutex<Vec<BlockedPeer>>>,
 ) -> Vec<SocketAddr> {
-    let mut new_peers = Vec::new();
-
-    match timeout(
-        Duration::from_secs(PEER_TIMEOUT),
-        connect_peer(network_id, (*tls).clone(), peer_addr),
-    )
-    .await
-    {
-        Ok(Ok((peer, ws_stream))) => {
-            if let Ok(response) = peer.request_peers().await {
-                authority.add_peer(peer.socket_addr()).await;
-
-                for peer_info in response.peer_list {
-                    if let Ok(ip) = peer_info.host.parse() {
-                        // Only add peers that are on the same port as the peer we connect to, since we only provide ips over dns
-                        if peer_addr.port() == peer_info.port {
-                            new_peers.push(SocketAddr::new(ip, peer_info.port));
-                        }
-                    }
-                }
-            }
-
-            drop(ws_stream);
-            drop(peer);
-        }
-        _ => {
+    match handle_peer_connection(peer_addr, tls, authority, network_id).await {
+        Ok(new_peers) => new_peers,
+        Err(_) => {
             debug!("Failed to connect to peer: {}", peer_addr);
             blocked_peers.lock().unwrap().push(BlockedPeer {
                 addr: peer_addr,
                 expires_at: Instant::now() + Duration::from_secs(PEER_BLOCKLIST_TTL),
             });
+            Vec::new()
         }
     }
-
-    new_peers
 }
 
 pub async fn start_peer_rechecker(
@@ -139,7 +149,6 @@ pub async fn start_peer_rechecker(
 
     loop {
         tokio::time::sleep(RECHECK_INTERVAL).await;
-
         let peers = authority.get_peers().await;
 
         info!(
@@ -158,13 +167,10 @@ pub async fn start_peer_rechecker(
                     let network_id = network_id.clone();
 
                     tasks.push(async move {
-                        let result = timeout(
-                            Duration::from_secs(PEER_TIMEOUT),
-                            connect_peer(network_id, (*tls).clone(), addr),
-                        )
-                        .await;
-
-                        if !matches!(result, Ok(Ok((_, _)))) {
+                        if handle_peer_connection(addr, tls, authority.clone(), network_id)
+                            .await
+                            .is_err()
+                        {
                             info!("Removing unreachable peer: {:?}", addr);
                             authority.remove_peer(addr).await;
                         }
