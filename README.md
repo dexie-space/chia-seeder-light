@@ -1,6 +1,6 @@
 # Chia Seeder Light
 
-Super light and barebones chia peer crawler and DNS seeder written in Rust based on [chia-wallet-sdk](https://github.com/xch-dev/chia-wallet-sdk). Doesn't hog CPU or memory like the reference seeder in [chia-blockchain](https://github.com/Chia-Network/chia-blockchain).
+Super light chia peer crawler and DNS seeder written in Rust based on [chia-wallet-sdk](https://github.com/xch-dev/chia-wallet-sdk). Doesn't hog CPU or memory like the reference seeder in [chia-blockchain](https://github.com/Chia-Network/chia-blockchain).
 
 Work in progress, likely not production ready.
 
