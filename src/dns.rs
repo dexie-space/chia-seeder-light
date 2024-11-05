@@ -55,12 +55,18 @@ impl RandomizedAuthority {
         }
     }
 
+    pub async fn known_peer(&self, addr: &SocketAddr) -> bool {
+        self.peers.read().await.contains(addr)
+    }
+
     pub async fn get_peers(&self) -> Vec<SocketAddr> {
         let peers = self.peers.read().await;
         peers.iter().cloned().collect()
     }
 
-    pub fn block_peer(&self, addr: SocketAddr, duration: Duration) {
+    pub async fn block_peer(&self, addr: SocketAddr, duration: Duration) {
+        self.remove_peer(addr).await;
+
         let mut blocked = self.blocked_peers.lock().unwrap();
         blocked.retain(|peer| peer.addr != addr);
         blocked.push(BlockedPeer {

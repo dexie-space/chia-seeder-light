@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-pub const PEER_TIMEOUT: u64 = 5;
+pub const PEER_TIMEOUT: u64 = 7;
 pub const DNS_RECORD_TTL: u32 = 300;
 pub const MAX_CONCURRENT_TASKS: usize = 100;
 pub const MAX_RECORDS_TO_RETURN: usize = 32;
