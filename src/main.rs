@@ -28,20 +28,11 @@ struct Opt {
     #[clap(
         long,
         short,
-        value_name = "ip",
+        value_name = "ip:port",
         help = "Set listen address",
-        default_value = "[::]"
+        default_value = "[::]:53"
     )]
-    address: String,
-
-    #[clap(
-        long,
-        short,
-        value_name = "port",
-        help = "Set listen port",
-        default_value = "53"
-    )]
-    port: u16,
+    listen_address: SocketAddr,
 
     #[clap(
         long,
@@ -101,7 +92,7 @@ async fn main() -> anyhow::Result<()> {
         opt.network_id.clone(),
     );
     let rechecker_handle = start_peer_rechecker(tls, authority.clone(), opt.network_id);
-    let server_handle = start_dns_server(catalog, opt.address, opt.port).await?;
+    let server_handle = start_dns_server(catalog, opt.listen_address).await?;
 
     tokio::select! {
         Err(e) = server_handle => println!("DNS server failed: {e}"),

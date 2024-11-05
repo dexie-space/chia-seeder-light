@@ -176,14 +176,13 @@ impl Authority for RandomizedAuthority {
 
 pub async fn start_dns_server(
     catalog: Catalog,
-    address: String,
-    port: u16,
+    listen_address: SocketAddr,
 ) -> anyhow::Result<tokio::task::JoinHandle<()>> {
     let mut server = ServerFuture::new(catalog);
-    let udp_socket = UdpSocket::bind(format!("{address}:{port}")).await?;
-    let tcp_listener = TcpListener::bind(format!("{address}:{port}")).await?;
+    let udp_socket = UdpSocket::bind(listen_address).await?;
+    let tcp_listener = TcpListener::bind(listen_address).await?;
 
-    println!("Starting DNS server on {}:{}", address, port);
+    println!("Starting DNS server on {}", listen_address);
 
     Ok(tokio::spawn(async move {
         server.register_socket(udp_socket);
