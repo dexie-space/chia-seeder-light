@@ -1,9 +1,11 @@
 use crate::config::*;
+
 use rand::seq::SliceRandom;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{sync::Mutex, time::Instant};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::RwLock;
 use tracing::info;
@@ -19,9 +21,15 @@ use trust_dns_server::proto::rr::{LowerName, Name, RData, Record, RecordType};
 use trust_dns_server::server::RequestInfo;
 use trust_dns_server::ServerFuture;
 
+struct BlockedPeer {
+    addr: SocketAddr,
+    expires_at: Instant,
+}
+
 pub struct RandomizedAuthority {
     peers: Arc<RwLock<HashSet<SocketAddr>>>,
     origin: LowerName,
+    blocked_peers: Arc<Mutex<Vec<BlockedPeer>>>,
 }
 
 impl RandomizedAuthority {
@@ -29,6 +37,7 @@ impl RandomizedAuthority {
         Self {
             peers: Arc::new(RwLock::new(HashSet::new())),
             origin: LowerName::new(&origin),
+            blocked_peers: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -49,6 +58,27 @@ impl RandomizedAuthority {
     pub async fn get_peers(&self) -> Vec<SocketAddr> {
         let peers = self.peers.read().await;
         peers.iter().cloned().collect()
+    }
+
+    pub fn block_peer(&self, addr: SocketAddr, duration: Duration) {
+        let mut blocked = self.blocked_peers.lock().unwrap();
+        blocked.push(BlockedPeer {
+            addr,
+            expires_at: Instant::now() + duration,
+        });
+    }
+
+    pub fn is_blocked(&self, addr: &SocketAddr) -> bool {
+        let blocked = self.blocked_peers.lock().unwrap();
+        let now = Instant::now();
+        blocked
+            .iter()
+            .any(|peer| &peer.addr == addr && peer.expires_at > now)
+    }
+
+    pub fn cleanup_blocklist(&self) -> () {
+        let mut blocked = self.blocked_peers.lock().unwrap();
+        blocked.retain(|peer| peer.expires_at > Instant::now());
     }
 }
 

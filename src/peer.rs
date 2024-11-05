@@ -6,16 +6,11 @@ use futures_util::stream::{FuturesUnordered, StreamExt};
 use std::{
     collections::{HashSet, VecDeque},
     net::SocketAddr,
-    sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    sync::Arc,
+    time::Duration,
 };
 use tokio::time::timeout;
 use tracing::{debug, info};
-
-struct BlockedPeer {
-    addr: SocketAddr,
-    expires_at: Instant,
-}
 
 pub fn start_peer_crawler(
     initial_peers: Vec<SocketAddr>,
@@ -28,7 +23,6 @@ pub fn start_peer_crawler(
         let mut seen_peers = HashSet::new();
         let mut peers_to_process = VecDeque::new();
         let mut active_tasks = FuturesUnordered::new();
-        let blocked_peers = Arc::new(Mutex::new(Vec::<BlockedPeer>::new()));
 
         for peer in initial_peers {
             if seen_peers.insert(peer) {
@@ -37,34 +31,17 @@ pub fn start_peer_crawler(
         }
 
         loop {
-            // Clean expired entries
-            {
-                let mut blocklist = blocked_peers.lock().unwrap();
-                blocklist.retain(|peer| peer.expires_at > Instant::now());
-            }
-
             while active_tasks.len() < MAX_CONCURRENT_TASKS {
                 if let Some(peer) = peers_to_process.pop_front() {
-                    if blocked_peers
-                        .lock()
-                        .unwrap()
-                        .iter()
-                        .any(|bp| bp.addr == peer)
-                    {
-                        debug!("Skipping blocked peer: {:?}", peer);
-                        continue;
-                    }
-
                     let tls = Arc::clone(&tls);
                     let authority = Arc::clone(&authority);
-                    let blocklist = Arc::clone(&blocked_peers);
-                    active_tasks.push(process_peer(
-                        peer,
-                        tls,
-                        authority,
-                        network_id.clone(),
-                        blocklist,
-                    ));
+                    let network_id = network_id.clone();
+                    active_tasks.push(async move {
+                        match handle_peer_connection(peer, tls, authority, network_id).await {
+                            Ok(new_peers) => new_peers,
+                            Err(_) => Vec::new(),
+                        }
+                    });
                 } else {
                     break;
                 }
@@ -91,6 +68,11 @@ async fn handle_peer_connection(
     authority: Arc<RandomizedAuthority>,
     network_id: String,
 ) -> Result<Vec<SocketAddr>, ()> {
+    if authority.is_blocked(&addr) {
+        debug!("Skipping blocked peer: {:?}", addr);
+        return Err(());
+    }
+
     let result = timeout(Duration::from_secs(PEER_TIMEOUT), async {
         let (peer, ws_stream) = connect_peer(network_id, (*tls).clone(), addr).await?;
         let response = peer.request_peers().await?;
@@ -116,31 +98,14 @@ async fn handle_peer_connection(
     match result {
         Ok(Ok(new_peers)) => Ok(new_peers),
         Ok(Err(e)) => {
-            debug!("Connection/request error for peer {}: {:?}", addr, e);
+            debug!("Error for peer {}: {:?}", addr, e);
+            authority.block_peer(addr, Duration::from_secs(PEER_BLOCKLIST_TTL));
             Err(())
         }
-        Err(e) => {
-            debug!("Timeout error for peer {}: {:?}", addr, e);
-            Err(())
-        }
-    }
-}
-
-async fn process_peer(
-    peer_addr: SocketAddr,
-    tls: Arc<Connector>,
-    authority: Arc<RandomizedAuthority>,
-    network_id: String,
-    blocked_peers: Arc<Mutex<Vec<BlockedPeer>>>,
-) -> Vec<SocketAddr> {
-    match handle_peer_connection(peer_addr, tls, authority, network_id).await {
-        Ok(new_peers) => new_peers,
         Err(_) => {
-            blocked_peers.lock().unwrap().push(BlockedPeer {
-                addr: peer_addr,
-                expires_at: Instant::now() + Duration::from_secs(PEER_BLOCKLIST_TTL),
-            });
-            Vec::new()
+            debug!("Timeout for peer {}", addr);
+            authority.block_peer(addr, Duration::from_secs(PEER_BLOCKLIST_TTL));
+            Err(())
         }
     }
 }
@@ -160,6 +125,8 @@ pub async fn start_peer_rechecker(
             "Starting periodic peer recheck, checking {} reachable peers",
             peers.len()
         );
+
+        authority.cleanup_blocklist();
 
         let mut tasks = FuturesUnordered::new();
         let mut remaining_peers = VecDeque::from_iter(peers);
