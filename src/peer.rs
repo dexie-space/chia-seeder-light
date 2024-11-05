@@ -5,6 +5,7 @@ use async_channel::{unbounded, Receiver, Sender};
 use chia_wallet_sdk::{connect_peer, Connector};
 use dashmap::DashSet;
 use futures_util::stream::{FuturesUnordered, StreamExt};
+use rand::seq::SliceRandom;
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::time::{sleep, timeout};
 use tracing::{debug, info};
@@ -65,13 +66,21 @@ impl PeerProcessor {
                     match recv_result {
                         Ok(peer) => {
                             if tasks.len() < MAX_CONCURRENT_TASKS {
+                                if !is_recheck && authority.known_peer(&peer).await {
+                                    return;
+                                }
+
+                                if authority.is_blocked(&peer) {
+                                    debug!("Skipping blocked peer: {:?}", peer);
+                                    return;
+                                }
+
                                 tasks.push(Self::process_peer(
                                     peer,
                                     tls.clone(),
                                     authority.clone(),
                                     network_id.clone(),
                                     sender.clone(),
-                                    is_recheck,
                                     processing.clone(),
                                 ));
                             } else {
@@ -97,20 +106,8 @@ impl PeerProcessor {
         authority: Arc<RandomizedAuthority>,
         network_id: Arc<String>,
         sender: Sender<SocketAddr>,
-        is_recheck: bool,
         processing: Arc<DashSet<SocketAddr>>,
     ) {
-        if !is_recheck && authority.known_peer(&peer).await {
-            processing.remove(&peer);
-            return;
-        }
-
-        if authority.is_blocked(&peer) {
-            debug!("Skipping blocked peer: {:?}", peer);
-            processing.remove(&peer);
-            return;
-        }
-
         let result = timeout(Duration::from_secs(PEER_TIMEOUT), async {
             let (peer_conn, mut stream) =
                 connect_peer((*network_id).clone(), (*tls).clone(), peer).await?;
@@ -204,9 +201,13 @@ pub async fn start_peer_rechecker(
 
         authority.cleanup_blocklist();
 
+        // add a nice chunk of random peers to the processing queue
         if processing_len < peers_len {
-            for peer in peers {
-                processor.process(peer);
+            let mut peers: Vec<_> = peers.into_iter().collect();
+            peers.shuffle(&mut rand::thread_rng());
+
+            for peer in peers.iter().take(peers_len - processing_len) {
+                processor.process(*peer);
             }
         }
     }
