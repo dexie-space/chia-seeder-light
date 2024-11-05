@@ -143,7 +143,6 @@ pub async fn start_peer_rechecker(
                             .await
                             .is_err()
                         {
-                            info!("Removing unreachable peer: {:?}", addr);
                             authority.remove_peer(addr).await;
                         }
                     });

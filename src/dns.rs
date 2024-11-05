@@ -51,7 +51,7 @@ impl RandomizedAuthority {
     pub async fn remove_peer(&self, addr: SocketAddr) {
         let mut peers = self.peers.write().await;
         if peers.remove(&addr) {
-            info!("Removed peer: {:?}", addr);
+            info!("Removed unreachable peer: {:?}", addr);
         }
     }
 
