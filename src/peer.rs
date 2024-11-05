@@ -93,8 +93,7 @@ async fn handle_peer_connection(
 ) -> Result<Vec<SocketAddr>, ()> {
     let result = timeout(Duration::from_secs(PEER_TIMEOUT), async {
         let (peer, ws_stream) = connect_peer(network_id, (*tls).clone(), addr).await?;
-
-        let response = timeout(Duration::from_secs(PEER_TIMEOUT), peer.request_peers()).await??;
+        let response = peer.request_peers().await?;
 
         authority.add_peer(peer.socket_addr()).await;
 
