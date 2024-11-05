@@ -91,33 +91,33 @@ async fn handle_peer_connection(
     authority: Arc<RandomizedAuthority>,
     network_id: String,
 ) -> Result<Vec<SocketAddr>, ()> {
-    let result = timeout(
-        Duration::from_secs(PEER_TIMEOUT),
-        connect_peer(network_id, (*tls).clone(), addr),
-    )
+    let result = timeout(Duration::from_secs(PEER_TIMEOUT), async {
+        let (peer, ws_stream) = connect_peer(network_id, (*tls).clone(), addr).await?;
+
+        let response = timeout(Duration::from_secs(PEER_TIMEOUT), peer.request_peers()).await??;
+
+        authority.add_peer(peer.socket_addr()).await;
+
+        let mut new_peers = Vec::new();
+        for peer_info in response.peer_list {
+            if let Ok(ip) = peer_info.host.parse() {
+                if addr.port() == peer_info.port {
+                    new_peers.push(SocketAddr::new(ip, peer_info.port));
+                }
+            }
+        }
+
+        drop(ws_stream);
+        drop(peer);
+
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(new_peers)
+    })
     .await;
 
     match result {
-        Ok(Ok((peer, ws_stream))) => {
-            let mut new_peers = Vec::new();
-            if let Ok(response) = peer.request_peers().await {
-                authority.add_peer(peer.socket_addr()).await;
-
-                for peer_info in response.peer_list {
-                    if let Ok(ip) = peer_info.host.parse() {
-                        // Only add peers that are on the same port as the peer we connect to
-                        if addr.port() == peer_info.port {
-                            new_peers.push(SocketAddr::new(ip, peer_info.port));
-                        }
-                    }
-                }
-            }
-            drop(ws_stream);
-            drop(peer);
-            Ok(new_peers)
-        }
+        Ok(Ok(new_peers)) => Ok(new_peers),
         Ok(Err(e)) => {
-            debug!("Connection error for peer {}: {:?}", addr, e);
+            debug!("Connection/request error for peer {}: {:?}", addr, e);
             Err(())
         }
         Err(e) => {
