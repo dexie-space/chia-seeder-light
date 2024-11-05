@@ -3,6 +3,7 @@ use clap::Parser;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
+use tracing::{error, info};
 use trust_dns_server::authority::Catalog;
 use trust_dns_server::proto::rr::Name;
 
@@ -53,7 +54,10 @@ struct Opt {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt()
+        .with_target(false)
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
 
     let opt = Opt::parse();
     let tls = create_rustls_connector(&load_ssl_cert("wallet.crt", "wallet.key")?)?;
@@ -63,7 +67,7 @@ async fn main() -> anyhow::Result<()> {
     } else if opt.network_id == "testnet11" {
         Network::default_testnet11()
     } else {
-        eprintln!("Error: Unknown network id: {}", opt.network_id);
+        error!("Error: Unknown network id: {}", opt.network_id);
         std::process::exit(1);
     };
 
@@ -76,12 +80,12 @@ async fn main() -> anyhow::Result<()> {
 
     // use entry node
     let peers = if let Some(entry_node) = opt.entry_node {
-        println!("Using entry node: {}", entry_node);
+        info!("Using entry node: {}", entry_node);
         vec![entry_node]
     } else {
-        println!("Looking up initial peers...");
+        info!("Looking up initial peers...");
         let peers = Network::lookup_all(&network, Duration::from_secs(10), 10).await;
-        println!("Found {} initial peers", peers.len());
+        info!("Found {} initial peers", peers.len());
         peers
     };
 
@@ -95,9 +99,9 @@ async fn main() -> anyhow::Result<()> {
     let server_handle = start_dns_server(catalog, opt.listen_address).await?;
 
     tokio::select! {
-        Err(e) = server_handle => println!("DNS server failed: {e}"),
-        Err(e) = crawler_handle => println!("Crawler failed: {e}"),
-        Err(e) = rechecker_handle => println!("Rechecker failed: {e}"),
+        Err(e) = server_handle => error!("DNS server failed: {e}"),
+        Err(e) = crawler_handle => error!("Crawler failed: {e}"),
+        Err(e) = rechecker_handle => error!("Rechecker failed: {e}"),
     };
 
     Ok(())

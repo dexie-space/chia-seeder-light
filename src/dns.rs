@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::RwLock;
+use tracing::info;
 use trust_dns_server::authority::Catalog;
 use trust_dns_server::authority::{
     AnyRecords, AuthLookup, Authority, LookupError, LookupOptions, LookupRecords, MessageRequest,
@@ -16,7 +17,6 @@ use trust_dns_server::proto::rr::RecordSet;
 use trust_dns_server::proto::rr::{LowerName, Name, RData, Record, RecordType};
 use trust_dns_server::server::RequestInfo;
 use trust_dns_server::ServerFuture;
-
 pub struct RandomizedAuthority {
     peers: Arc<RwLock<Vec<SocketAddr>>>,
     origin: LowerName,
@@ -33,7 +33,7 @@ impl RandomizedAuthority {
     pub async fn add_peer(&self, addr: SocketAddr) {
         let mut peers = self.peers.write().await;
         if !peers.contains(&addr) {
-            println!("Adding reachable peer: {:?}", addr);
+            info!("Adding reachable peer: {:?}", addr);
             peers.push(addr);
         }
     }
@@ -182,7 +182,7 @@ pub async fn start_dns_server(
     let udp_socket = UdpSocket::bind(listen_address).await?;
     let tcp_listener = TcpListener::bind(listen_address).await?;
 
-    println!("Starting DNS server on {}", listen_address);
+    info!("Starting DNS server on {}", listen_address);
 
     Ok(tokio::spawn(async move {
         server.register_socket(udp_socket);

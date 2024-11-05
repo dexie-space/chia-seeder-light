@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::time::timeout;
-use tracing::info;
+use tracing::{debug, info};
 
 struct BlockedPeer {
     addr: SocketAddr,
@@ -52,7 +52,7 @@ pub fn start_peer_crawler(
                     };
 
                     if is_blocked {
-                        info!("Skipping blocked peer: {:?}", peer);
+                        debug!("Skipping blocked peer: {:?}", peer);
                         continue;
                     }
 
@@ -119,7 +119,7 @@ async fn process_peer(
             drop(peer);
         }
         _ => {
-            info!("Failed to connect to peer: {}", peer_addr);
+            debug!("Failed to connect to peer: {}", peer_addr);
             blocked_peers.lock().unwrap().push(BlockedPeer {
                 addr: peer_addr,
                 expires_at: Instant::now() + Duration::from_secs(PEER_BLOCKLIST_TTL),
@@ -142,7 +142,7 @@ pub async fn start_peer_rechecker(
 
         let peers = authority.get_peers().await;
 
-        println!(
+        info!(
             "Starting periodic peer recheck, checking {} reachable peers",
             peers.len()
         );
@@ -165,7 +165,7 @@ pub async fn start_peer_rechecker(
                         .await;
 
                         if !matches!(result, Ok(Ok((_, _)))) {
-                            println!("Removing unreachable peer: {:?}", addr);
+                            info!("Removing unreachable peer: {:?}", addr);
                             authority.remove_peer(addr).await;
                         }
                     });
