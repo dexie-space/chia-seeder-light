@@ -1,5 +1,6 @@
 use crate::config::*;
 use rand::seq::SliceRandom;
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,35 +18,37 @@ use trust_dns_server::proto::rr::RecordSet;
 use trust_dns_server::proto::rr::{LowerName, Name, RData, Record, RecordType};
 use trust_dns_server::server::RequestInfo;
 use trust_dns_server::ServerFuture;
+
 pub struct RandomizedAuthority {
-    peers: Arc<RwLock<Vec<SocketAddr>>>,
+    peers: Arc<RwLock<HashSet<SocketAddr>>>,
     origin: LowerName,
 }
 
 impl RandomizedAuthority {
     pub fn new(origin: Name) -> Self {
         Self {
-            peers: Arc::new(RwLock::new(Vec::new())),
+            peers: Arc::new(RwLock::new(HashSet::new())),
             origin: LowerName::new(&origin),
         }
     }
 
     pub async fn add_peer(&self, addr: SocketAddr) {
         let mut peers = self.peers.write().await;
-        if !peers.contains(&addr) {
-            info!("Adding reachable peer: {:?}", addr);
-            peers.push(addr);
+        if peers.insert(addr) {
+            info!("Added reachable peer: {:?}", addr);
         }
     }
 
     pub async fn remove_peer(&self, addr: SocketAddr) {
         let mut peers = self.peers.write().await;
-        peers.retain(|&peer_ip| peer_ip != addr);
+        if peers.remove(&addr) {
+            info!("Removed peer: {:?}", addr);
+        }
     }
 
     pub async fn get_peers(&self) -> Vec<SocketAddr> {
         let peers = self.peers.read().await;
-        peers.clone()
+        peers.iter().cloned().collect()
     }
 }
 
