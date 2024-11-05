@@ -12,6 +12,7 @@ Options:
   -a, --address <ip>             Set listen address [default: 0.0.0.0]
   -p, --port <port>              Set listen port [default: 53]
   -d, --domain <domain>          Set seeder domain (eg. seeder.dexie.space.), Important: must end with a dot
+  -e, --entry-node <ip:port>    Set initial entry node, will not use DNS to find peers (eg. 203.0.113.23:8444)
   -h, --help                     Print help
   -V, --version                  Print version
 ```
