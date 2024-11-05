@@ -62,6 +62,8 @@ struct Opt {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt::init();
+
     let opt = Opt::parse();
     let tls = create_rustls_connector(&load_ssl_cert("wallet.crt", "wallet.key")?)?;
 
