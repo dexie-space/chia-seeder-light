@@ -136,7 +136,6 @@ async fn process_peer(
     match handle_peer_connection(peer_addr, tls, authority, network_id).await {
         Ok(new_peers) => new_peers,
         Err(_) => {
-            debug!("Failed to connect to peer: {}", peer_addr);
             blocked_peers.lock().unwrap().push(BlockedPeer {
                 addr: peer_addr,
                 expires_at: Instant::now() + Duration::from_secs(PEER_BLOCKLIST_TTL),
