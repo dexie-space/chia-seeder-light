@@ -1,5 +1,6 @@
 use chia_wallet_sdk::{create_rustls_connector, load_ssl_cert, Network};
 use clap::Parser;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use trust_dns_server::authority::Catalog;
@@ -49,6 +50,14 @@ struct Opt {
         help = "Set seeder domain (eg. seeder.dexie.space.), Important: must end with a dot"
     )]
     domain: String,
+
+    #[clap(
+        long,
+        short,
+        value_name = "ip:port",
+        help = "Set initial entry node, will not use DNS to find peers (eg. 203.0.113.23:8444)"
+    )]
+    entry_node: Option<SocketAddr>,
 }
 
 #[tokio::main]
@@ -72,9 +81,16 @@ async fn main() -> anyhow::Result<()> {
     let mut catalog = Catalog::new();
     catalog.upsert(zone_name.clone().into(), Box::new(authority.clone()));
 
-    println!("Looking up initial peers...");
-    let peers = Network::lookup_all(&network, Duration::from_secs(10), 10).await;
-    println!("Found {} initial peers", peers.len());
+    // use entry node
+    let peers = if let Some(entry_node) = opt.entry_node {
+        println!("Using entry node: {}", entry_node);
+        vec![entry_node]
+    } else {
+        println!("Looking up initial peers...");
+        let peers = Network::lookup_all(&network, Duration::from_secs(10), 10).await;
+        println!("Found {} initial peers", peers.len());
+        peers
+    };
 
     let crawler_handle = start_peer_crawler(
         peers,
