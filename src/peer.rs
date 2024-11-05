@@ -116,7 +116,14 @@ async fn handle_peer_connection(
             drop(peer);
             Ok(new_peers)
         }
-        _ => Err(()),
+        Ok(Err(e)) => {
+            debug!("Connection error for peer {}: {:?}", addr, e);
+            Err(())
+        }
+        Err(e) => {
+            debug!("Timeout error for peer {}: {:?}", addr, e);
+            Err(())
+        }
     }
 }
 
