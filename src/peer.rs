@@ -124,6 +124,13 @@ impl PeerProcessor {
                 processing.remove(&peer);
 
                 for new_peer in new_peers {
+                    let peer_status = authority.get_peer_status(&new_peer).await;
+
+                    // ignore already processed peers
+                    if matches!(peer_status, PeerStatus::Unreachable | PeerStatus::Reachable) {
+                        continue;
+                    }
+
                     // Process new peers received from the peer
                     if processing.insert(new_peer) {
                         if sender.try_send(new_peer).is_err() {
