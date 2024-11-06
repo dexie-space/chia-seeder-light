@@ -203,7 +203,7 @@ pub async fn start_peer_rechecker(
         let reachable_peer_count = authority.get_reachable_peer_count();
 
         info!(
-            "Starting periodic peer recheck, {} reachable peers, {} expired reachable peers, {} processing",
+            "Starting periodic peer recheck, {} reachable peers ({} expired), {} processing",
             reachable_peer_count, peers_len, processing_len
         );
 

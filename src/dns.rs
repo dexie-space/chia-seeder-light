@@ -139,7 +139,7 @@ impl PeerDiscoveryAuthority {
         .unwrap();
 
         if previous_peer_status == PeerStatus::ReachableExpired {
-            info!("Marked peer as unreachable: {:?}", addr);
+            info!("Removed unreachable peer: {:?}", addr);
         }
     }
 
