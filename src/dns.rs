@@ -87,7 +87,11 @@ impl PeerDiscoveryAuthority {
         let conn = self.db_pool.get().unwrap();
 
         let mut stmt = conn
-            .prepare("SELECT addr FROM peers WHERE is_reachable = 1 AND expires_at <= strftime('%s', 'now') ORDER BY expires_at LIMIT ?")
+            .prepare(
+                "SELECT addr FROM peers
+                WHERE is_reachable = 1 AND expires_at <= strftime('%s', 'now')
+                ORDER BY RANDOM() LIMIT ?",
+            )
             .unwrap();
 
         let peers = stmt

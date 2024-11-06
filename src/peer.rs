@@ -164,20 +164,19 @@ pub async fn start_peer_rechecker(
     loop {
         authority.cleanup_unreachable_peers();
 
-        let peers = authority
+        let expired_peers = authority
             .get_expired_reachable_peers(PEER_RECHECK_BATCH_SIZE)
             .await;
 
         let reachable_peer_count = authority.get_reachable_peer_count();
 
         info!(
-            "Starting periodic peer recheck, {} reachable peers ({} expired), {} processing",
+            "Starting periodic peer recheck, {} reachable peers, {} processing",
             reachable_peer_count,
-            peers.len(),
             processor.processing.len()
         );
 
-        for peer in peers {
+        for peer in expired_peers {
             processor.process(peer).await;
         }
 
