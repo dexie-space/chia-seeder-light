@@ -1,6 +1,6 @@
 [package]
 name = "chia-seeder-light"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 
 [dependencies]
@@ -8,9 +8,11 @@ anyhow = "1.0.92"
 async-channel = "2.3.1"
 async-trait = "0.1.83"
 chia = "0.15.0"
+chia-protocol = "0.15.0"
 chia-wallet-sdk = { version = "0.17.0", features = ["rustls"] }
 clap = { version = "4.5.20", features = ["derive"] }
 dashmap = "6.1.0"
+futures = "0.3.31"
 r2d2 = "0.8.10"
 r2d2_sqlite = "0.25.0"
 rand = "0.8.5"

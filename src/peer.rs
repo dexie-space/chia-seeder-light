@@ -4,8 +4,8 @@ use crate::dns::*;
 use async_channel::{unbounded, Receiver, Sender};
 use chia_wallet_sdk::{connect_peer, Connector};
 use dashmap::DashSet;
+use futures::stream::StreamExt;
 use std::{net::SocketAddr, sync::Arc};
-use tokio::sync::Semaphore;
 use tokio::time::{sleep, timeout};
 use tracing::{debug, info};
 
@@ -51,30 +51,29 @@ impl PeerProcessor {
         processing: Arc<DashSet<SocketAddr>>,
         sender: Sender<SocketAddr>,
     ) {
-        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_TASKS));
+        receiver
+            .for_each_concurrent(MAX_CONCURRENT_TASKS, |peer| {
+                let tls = tls.clone();
+                let network_id = network_id.clone();
+                let sender = sender.clone();
+                let processing = processing.clone();
+                let authority = authority.clone();
 
-        while let Ok(peer) = receiver.recv().await {
-            let permit = semaphore.clone().acquire_owned().await.unwrap();
-            let tls = tls.clone();
-            let network_id = network_id.clone();
-            let sender = sender.clone();
-            let processing = processing.clone();
-            let authority = authority.clone();
-
-            tokio::spawn(async move {
-                let _permit = permit;
-                Self::process_peer(peer, tls, authority, network_id, sender, processing).await
-            });
-        }
+                async move {
+                    Self::process_peer(peer, &tls, &authority, &network_id, &sender, &processing)
+                        .await;
+                }
+            })
+            .await;
     }
 
     async fn process_peer(
         peer: SocketAddr,
-        tls: Arc<Connector>,
-        authority: Arc<PeerDiscoveryAuthority>,
-        network_id: Arc<String>,
-        sender: Sender<SocketAddr>,
-        processing: Arc<DashSet<SocketAddr>>,
+        tls: &Arc<Connector>,
+        authority: &Arc<PeerDiscoveryAuthority>,
+        network_id: &Arc<String>,
+        sender: &Sender<SocketAddr>,
+        processing: &Arc<DashSet<SocketAddr>>,
     ) {
         let previous_peer_status = authority.get_peer_status(&peer).await;
 
@@ -89,7 +88,7 @@ impl PeerProcessor {
 
         let result = timeout(PEER_TIMEOUT, async {
             let (peer_conn, mut stream) =
-                connect_peer(network_id.as_str().to_string(), (*tls).clone(), peer).await?;
+                connect_peer(network_id.as_str().to_string(), (**tls).clone(), peer).await?;
             let response = peer_conn.request_peers().await?;
 
             let new_peers = response
@@ -125,8 +124,11 @@ impl PeerProcessor {
                 processing.remove(&peer);
 
                 for new_peer in new_peers {
-                    if let Err(e) = sender.try_send(new_peer) {
-                        debug!("Failed to queue new peer {}: {:?}", new_peer, e);
+                    // Process new peers received from the peer
+                    if processing.insert(new_peer) {
+                        if sender.try_send(new_peer).is_err() {
+                            processing.remove(&new_peer);
+                        }
                     }
                 }
             }
@@ -148,33 +150,10 @@ impl PeerProcessor {
     }
 }
 
-pub fn start_peer_crawler(
-    initial_peers: Vec<SocketAddr>,
-    tls: Connector,
-    authority: Arc<PeerDiscoveryAuthority>,
-    network_id: String,
-) -> (PeerProcessor, tokio::task::JoinHandle<()>) {
-    let processor = PeerProcessor::new(tls, authority, network_id);
-
-    let handle = tokio::spawn({
-        let processor = processor.clone();
-        async move {
-            for peer in initial_peers {
-                processor.process(peer).await;
-            }
-        }
-    });
-
-    (processor, handle)
-}
-
 pub async fn start_peer_rechecker(
-    tls: Connector,
+    processor: PeerProcessor,
     authority: Arc<PeerDiscoveryAuthority>,
-    network_id: String,
 ) -> anyhow::Result<()> {
-    let processor = PeerProcessor::new(tls, authority.clone(), network_id);
-
     loop {
         authority.cleanup_unreachable_peers();
 

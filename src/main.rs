@@ -8,7 +8,7 @@ use trust_dns_server::authority::Catalog;
 use trust_dns_server::proto::rr::Name;
 
 use crate::dns::*;
-use crate::peer::{start_peer_crawler, start_peer_rechecker};
+use crate::peer::{start_peer_rechecker, PeerProcessor};
 
 mod config;
 mod dns;
@@ -83,7 +83,7 @@ async fn main() -> anyhow::Result<()> {
     let mut catalog = Catalog::new();
     catalog.upsert(zone_name.clone().into(), Box::new(authority.clone()));
 
-    // use entry node
+    // Use entry node
     let peers = if let Some(entry_node) = opt.entry_node {
         info!("Using entry node: {}", entry_node);
         vec![entry_node]
@@ -94,20 +94,39 @@ async fn main() -> anyhow::Result<()> {
         peers
     };
 
-    let (_, crawler_handle) = start_peer_crawler(
-        peers,
-        tls.clone(),
-        authority.clone(),
-        opt.network_id.clone(),
-    );
-    let rechecker_handle = start_peer_rechecker(tls, authority.clone(), opt.network_id);
+    // Processing queue of peers to connect to
+    let processor = PeerProcessor::new(tls.clone(), authority.clone(), opt.network_id.clone());
+
+    // Start the peer crawler
+    let crawler_handle = tokio::spawn({
+        let processor = processor.clone();
+        async move {
+            for peer in peers {
+                processor.process(peer).await;
+            }
+        }
+    });
+
+    // Start the peer rechecker using the same PeerProcessor
+    let rechecker_handle = tokio::spawn({
+        let processor = processor.clone();
+        let authority = authority.clone();
+        async move {
+            if let Err(e) = start_peer_rechecker(processor, authority).await {
+                error!("Rechecker failed: {:?}", e);
+            }
+        }
+    });
+
+    // Start the DNS server
     let server_handle = start_dns_server(catalog, opt.listen_address).await?;
 
-    tokio::select! {
-        Err(e) = server_handle => error!("DNS server failed: {e}"),
-        Err(e) = crawler_handle => error!("Crawler failed: {e}"),
-        Err(e) = rechecker_handle => error!("Rechecker failed: {e}"),
-    };
+    let (_crawler_res, _rechecker_res, server_res) =
+        tokio::join!(crawler_handle, rechecker_handle, server_handle);
+
+    if let Err(e) = server_res {
+        error!("DNS server failed: {e}");
+    }
 
     Ok(())
 }
