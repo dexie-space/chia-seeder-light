@@ -87,10 +87,11 @@ impl PeerProcessor {
                             }
                         }
                         Err(_) => {
-                            // Receiver is closed; if no tasks are left, break the loop
-                            if tasks.is_empty() {
-                                break;
+                            // Receiver is closed; wait for remaining tasks to complete
+                            while !tasks.is_empty() {
+                                tasks.next().await;
                             }
+                            break;
                         }
                     }
                 },
