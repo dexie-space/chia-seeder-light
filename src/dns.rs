@@ -49,7 +49,13 @@ impl PeerDiscoveryAuthority {
                 addr TEXT PRIMARY KEY,
                 is_reachable INTEGER NOT NULL,
                 expires_at INTEGER NOT NULL
-            )",
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_peers_reachable_expires ON peers(is_reachable, expires_at);
+            CREATE INDEX IF NOT EXISTS idx_peers_reachable ON peers(is_reachable);
+
+            PRAGMA synchronous = OFF;
+            PRAGMA busy_timeout = 1000;",
             [],
         )
         .unwrap();
