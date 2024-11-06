@@ -7,7 +7,7 @@ use dashmap::DashSet;
 use futures::stream::StreamExt;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::time::{sleep, timeout};
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 #[derive(Clone)]
 pub struct PeerProcessor {
@@ -162,8 +162,6 @@ pub async fn start_peer_rechecker(
     authority: Arc<PeerDiscoveryAuthority>,
 ) -> anyhow::Result<()> {
     loop {
-        authority.cleanup_unreachable_peers();
-
         let expired_peers = authority
             .get_expired_reachable_peers(PEER_RECHECK_BATCH_SIZE)
             .await;
@@ -180,6 +178,10 @@ pub async fn start_peer_rechecker(
             for peer in expired_peers {
                 processor.process(peer).await;
             }
+        }
+
+        if let Err(e) = authority.cleanup_unreachable_peers() {
+            error!("Failed to cleanup peers: {:?}", e);
         }
 
         sleep(PEER_RECHECK_INTERVAL).await;

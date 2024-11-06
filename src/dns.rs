@@ -183,14 +183,13 @@ impl PeerDiscoveryAuthority {
         }
     }
 
-    pub fn cleanup_unreachable_peers(&self) {
+    pub fn cleanup_unreachable_peers(&self) -> Result<(), rusqlite::Error> {
         let conn = self.db_pool.get().unwrap();
-
         conn.execute(
             "DELETE FROM peers WHERE is_reachable = 0 AND expires_at <= strftime('%s', 'now')",
             [],
-        )
-        .unwrap();
+        )?;
+        Ok(())
     }
 
     pub fn get_reachable_peer_count(&self) -> usize {
