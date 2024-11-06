@@ -11,8 +11,6 @@ chia = "0.15.0"
 chia-wallet-sdk = { version = "0.17.0", features = ["rustls"] }
 clap = { version = "4.5.20", features = ["derive"] }
 dashmap = "6.1.0"
-futures = "0.3.31"
-futures-util = "0.3.31"
 r2d2 = "0.8.10"
 r2d2_sqlite = "0.25.0"
 rand = "0.8.5"

@@ -4,11 +4,12 @@ use crate::dns::*;
 use async_channel::{unbounded, Receiver, Sender};
 use chia_wallet_sdk::{connect_peer, Connector};
 use dashmap::DashSet;
-use futures_util::stream::{FuturesUnordered, StreamExt};
 use std::{net::SocketAddr, sync::Arc};
+use tokio::sync::Semaphore;
 use tokio::time::{sleep, timeout};
 use tracing::{debug, info};
 
+#[derive(Clone)]
 pub struct PeerProcessor {
     sender: Sender<SocketAddr>,
     processing: Arc<DashSet<SocketAddr>>,
@@ -34,10 +35,11 @@ impl PeerProcessor {
         Self { sender, processing }
     }
 
-    pub fn process(&self, peer: SocketAddr) {
-        // Only send if not already processing this peer
+    pub async fn process(&self, peer: SocketAddr) {
         if self.processing.insert(peer) {
-            let _ = self.sender.try_send(peer);
+            if self.sender.try_send(peer).is_err() {
+                self.processing.remove(&peer);
+            }
         }
     }
 
@@ -49,53 +51,20 @@ impl PeerProcessor {
         processing: Arc<DashSet<SocketAddr>>,
         sender: Sender<SocketAddr>,
     ) {
-        let mut tasks = FuturesUnordered::new();
+        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_TASKS));
 
-        loop {
-            tokio::select! {
-                Some(_) = tasks.next() => {},
-                recv_result = receiver.recv() => {
-                    match recv_result {
-                        Ok(peer) => {
-                            let previous_peer_status = authority.get_peer_status(&peer).await;
+        while let Ok(peer) = receiver.recv().await {
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            let tls = tls.clone();
+            let network_id = network_id.clone();
+            let sender = sender.clone();
+            let processing = processing.clone();
+            let authority = authority.clone();
 
-                            match previous_peer_status {
-                                PeerStatus::Unreachable => {
-                                    debug!("Skipping unreachable peer: {:?}", peer);
-                                    continue;
-                                }
-                                PeerStatus::Reachable => {
-                                    debug!("Skipping reachable peer: {:?}", peer);
-                                    continue;
-                                }
-                                _ => {}
-                            }
-
-                            if tasks.len() < MAX_CONCURRENT_TASKS {
-                                tasks.push(Self::process_peer(
-                                    peer,
-                                    tls.clone(),
-                                    authority.clone(),
-                                    network_id.clone(),
-                                    sender.clone(),
-                                    processing.clone(),
-                                    previous_peer_status,
-                                ));
-                            } else {
-                                // Wait for a task to complete before processing more peers
-                                tasks.next().await;
-                            }
-                        }
-                        Err(_) => {
-                            // Receiver is closed; wait for remaining tasks to complete
-                            while !tasks.is_empty() {
-                                tasks.next().await;
-                            }
-                            break;
-                        }
-                    }
-                },
-            }
+            tokio::spawn(async move {
+                let _permit = permit;
+                Self::process_peer(peer, tls, authority, network_id, sender, processing).await
+            });
         }
     }
 
@@ -106,20 +75,22 @@ impl PeerProcessor {
         network_id: Arc<String>,
         sender: Sender<SocketAddr>,
         processing: Arc<DashSet<SocketAddr>>,
-        previous_peer_status: PeerStatus,
     ) {
+        let previous_peer_status = authority.get_peer_status(&peer).await;
+
+        if matches!(
+            previous_peer_status,
+            PeerStatus::Unreachable | PeerStatus::Reachable
+        ) {
+            debug!("Skipping {:?} peer: {:?}", previous_peer_status, peer);
+            processing.remove(&peer);
+            return;
+        }
+
         let result = timeout(PEER_TIMEOUT, async {
             let (peer_conn, mut stream) =
-                connect_peer((*network_id).clone(), (*tls).clone(), peer).await?;
+                connect_peer(network_id.as_str().to_string(), (*tls).clone(), peer).await?;
             let response = peer_conn.request_peers().await?;
-
-            authority
-                .mark_peer_reachable(
-                    peer_conn.socket_addr(),
-                    PEER_REACHABLE_TTL,
-                    previous_peer_status.clone(),
-                )
-                .await;
 
             let new_peers = response
                 .peer_list
@@ -137,9 +108,8 @@ impl PeerProcessor {
             stream.close();
             drop(stream);
 
-            match peer_conn.close().await {
-                Ok(_) => (),
-                Err(e) => debug!("Error closing connection for peer {}: {:?}", peer, e),
+            if let Err(e) = peer_conn.close().await {
+                debug!("Error closing connection for peer {}: {:?}", peer, e);
             }
             drop(peer_conn);
 
@@ -147,25 +117,32 @@ impl PeerProcessor {
         })
         .await;
 
-        processing.remove(&peer);
-
         match result {
             Ok(Ok(new_peers)) => {
+                authority
+                    .mark_peer_reachable(peer, PEER_REACHABLE_TTL, previous_peer_status.clone())
+                    .await;
+                processing.remove(&peer);
+
                 for new_peer in new_peers {
-                    let _ = sender.try_send(new_peer);
+                    if let Err(e) = sender.try_send(new_peer) {
+                        debug!("Failed to queue new peer {}: {:?}", new_peer, e);
+                    }
                 }
             }
             Ok(Err(e)) => {
                 debug!("Error for peer {}: {:?}", peer, e);
                 authority
-                    .mark_peer_unreachable(peer, PEER_UNREACHABLE_TTL, previous_peer_status.clone())
+                    .mark_peer_unreachable(peer, PEER_UNREACHABLE_TTL, previous_peer_status)
                     .await;
+                processing.remove(&peer);
             }
             Err(_) => {
                 debug!("Timeout for peer {}", peer);
                 authority
                     .mark_peer_unreachable(peer, PEER_UNREACHABLE_TTL, previous_peer_status)
                     .await;
+                processing.remove(&peer);
             }
         }
     }
@@ -176,14 +153,19 @@ pub fn start_peer_crawler(
     tls: Connector,
     authority: Arc<PeerDiscoveryAuthority>,
     network_id: String,
-) -> tokio::task::JoinHandle<()> {
+) -> (PeerProcessor, tokio::task::JoinHandle<()>) {
     let processor = PeerProcessor::new(tls, authority, network_id);
 
-    tokio::spawn(async move {
-        for peer in initial_peers {
-            processor.process(peer);
+    let handle = tokio::spawn({
+        let processor = processor.clone();
+        async move {
+            for peer in initial_peers {
+                processor.process(peer).await;
+            }
         }
-    })
+    });
+
+    (processor, handle)
 }
 
 pub async fn start_peer_rechecker(
@@ -200,19 +182,17 @@ pub async fn start_peer_rechecker(
             .get_peers(true, PEER_RECHECK_BATCH_SIZE, None)
             .await;
 
-        let peers_len = peers.len();
-        let processing_len = processor.processing.len();
         let reachable_peer_count = authority.get_reachable_peer_count();
 
         info!(
             "Starting periodic peer recheck, {} reachable peers ({} expired), {} processing",
-            reachable_peer_count, peers_len, processing_len
+            reachable_peer_count,
+            peers.len(),
+            processor.processing.len()
         );
 
-        if processing_len < peers_len {
-            for peer in peers.iter().take(peers_len - processing_len) {
-                processor.process(*peer);
-            }
+        for peer in peers {
+            processor.process(peer).await;
         }
 
         sleep(PEER_RECHECK_INTERVAL).await;

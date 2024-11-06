@@ -94,7 +94,7 @@ async fn main() -> anyhow::Result<()> {
         peers
     };
 
-    let crawler_handle = start_peer_crawler(
+    let (_, crawler_handle) = start_peer_crawler(
         peers,
         tls.clone(),
         authority.clone(),
