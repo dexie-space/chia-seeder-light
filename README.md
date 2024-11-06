@@ -2,6 +2,14 @@
 
 Super light chia peer crawler and DNS seeder written in Rust based on [chia-wallet-sdk](https://github.com/xch-dev/chia-wallet-sdk). Doesn't hog CPU or memory like the reference seeder in [chia-blockchain](https://github.com/Chia-Network/chia-blockchain).
 
+## Installation
+
+Download the binary from [releases](https://github.com/dexie-space/chia-seeder-light/releases) or install via cargo:
+
+```
+cargo install chia-seeder-light
+```
+
 ```bash
 Usage: chia-seeder-light [OPTIONS] --domain <domain>
 
@@ -14,4 +22,4 @@ Options:
   -V, --version                   Print version
 ```
 
-Note: To operate on port 53, chia-seeder-light must run as root. Alternatively, you can configure firewall rules to forward traffic to the appropriate port.
+Note: To operate on port 53, chia-seeder-light must run as root. Alternatively configure firewall rules to forward traffic to the appropriate port.

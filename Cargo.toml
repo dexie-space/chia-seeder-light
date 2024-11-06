@@ -1,7 +1,13 @@
 [package]
 name = "chia-seeder-light"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
+authors = ["dns <dns@dexie.space>"]
+description = "Super light chia peer crawler and DNS seeder"
+license = "MIT"
+homepage = "https://dexie.space/seeder"
+repository = "https://github.com/dexie-space/chia-seeder-light"
+keywords = ["chia", "blockchain", "crypto", "dns", "chia-wallet-sdk"]
 
 [dependencies]
 anyhow = "1.0.92"
