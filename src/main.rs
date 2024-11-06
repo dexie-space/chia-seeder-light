@@ -78,7 +78,10 @@ async fn main() -> anyhow::Result<()> {
 
     // DNS zone setup
     let zone_name = Name::parse(&opt.domain, None)?;
-    let authority = Arc::new(PeerDiscoveryAuthority::new(zone_name.clone()));
+    let authority = Arc::new(PeerDiscoveryAuthority::new(
+        zone_name.clone(),
+        network.clone(),
+    ));
 
     let mut catalog = Catalog::new();
     catalog.upsert(zone_name.clone().into(), Box::new(authority.clone()));
@@ -95,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Processing queue of peers to connect to
-    let processor = PeerProcessor::new(tls.clone(), authority.clone(), opt.network_id.clone());
+    let processor = PeerProcessor::new(tls.clone(), authority.clone(), opt.network_id);
 
     // Start the peer crawler
     let crawler_handle = tokio::spawn({

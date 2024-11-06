@@ -1,5 +1,6 @@
 use crate::config::*;
 
+use chia_wallet_sdk::Network;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use std::net::SocketAddr;
@@ -32,10 +33,11 @@ pub enum PeerStatus {
 pub struct PeerDiscoveryAuthority {
     origin: LowerName,
     db_pool: Pool<SqliteConnectionManager>,
+    network: Network,
 }
 
 impl PeerDiscoveryAuthority {
-    pub fn new(origin: Name) -> Self {
+    pub fn new(origin: Name, network: Network) -> Self {
         let db_path = PathBuf::from("peers.db");
         let manager = SqliteConnectionManager::file(&db_path);
         let pool = Pool::new(manager).unwrap();
@@ -55,21 +57,23 @@ impl PeerDiscoveryAuthority {
         Self {
             origin: LowerName::new(&origin),
             db_pool: pool,
+            network,
         }
     }
 
-    pub async fn get_peers(&self, max_records: usize, ip_version: Option<&str>) -> Vec<SocketAddr> {
+    pub async fn get_peers(&self, max_records: usize, record_type: RecordType) -> Vec<SocketAddr> {
         let conn = self.db_pool.get().unwrap();
 
-        let ip_filter = match ip_version {
-            Some("v4") => "AND addr NOT LIKE '%:%:%'",
-            Some("v6") => "AND addr LIKE '%:%:%'",
-            _ => "",
+        let ip_pattern = match record_type {
+            RecordType::A => format!("AND addr NOT LIKE '[%'"),
+            RecordType::AAAA => format!("AND addr LIKE '[%'"),
+            _ => return Vec::new(),
         };
 
         let query = format!(
-            "SELECT addr FROM peers WHERE is_reachable = 1 {} ORDER BY RANDOM() LIMIT ?",
-            ip_filter
+            "SELECT addr FROM peers WHERE is_reachable = 1 AND addr LIKE '%:{}' {} ORDER BY RANDOM() LIMIT ?",
+            self.network.default_port,
+            ip_pattern
         );
 
         let mut stmt = conn.prepare(&query).unwrap();
@@ -224,13 +228,7 @@ impl Authority for PeerDiscoveryAuthority {
             return Ok(AuthLookup::default());
         }
 
-        let ip_version = match rtype {
-            RecordType::A => Some("v4"),
-            RecordType::AAAA => Some("v6"),
-            _ => None,
-        };
-
-        let peers = self.get_peers(MAX_RECORDS_TO_RETURN, ip_version).await;
+        let peers = self.get_peers(MAX_RECORDS_TO_RETURN, rtype).await;
 
         let mut records = Vec::new();
 
