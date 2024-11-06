@@ -187,8 +187,12 @@ pub async fn start_peer_rechecker(
             reachable_peer_count,
         );
 
-        for peer in expired_peers {
-            processor.process(peer).await;
+        let processing_len = processor.processing.len();
+
+        if processing_len < PEER_RECHECK_BATCH_SIZE {
+            for peer in expired_peers {
+                processor.process(peer).await;
+            }
         }
 
         sleep(PEER_RECHECK_INTERVAL).await;
