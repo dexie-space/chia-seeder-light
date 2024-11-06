@@ -1,6 +1,6 @@
 [package]
 name = "chia-seeder-light"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 authors = ["dns <dns@dexie.space>"]
 description = "Super light chia peer crawler and DNS seeder"
