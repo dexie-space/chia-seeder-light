@@ -52,7 +52,7 @@ impl PeerProcessor {
         sender: Sender<SocketAddr>,
     ) {
         receiver
-            .for_each_concurrent(MAX_CONCURRENT_TASKS, |peer| {
+            .for_each_concurrent(MAX_CONCURRENT_CONNECTIONS, |peer| {
                 let tls = tls.clone();
                 let network_id = network_id.clone();
                 let sender = sender.clone();

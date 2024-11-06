@@ -23,3 +23,11 @@ Options:
 ```
 
 Note: To operate on port 53, chia-seeder-light must run as root. Alternatively configure firewall rules to forward traffic to the appropriate port.
+
+## How it works
+
+This seeder takes a graceful approach to crawling the network. On startup, it either uses a specified entry node or discovers initial peers through other DNS seeders. It then connects to each discovered peer using the chia protocol to verify they're reachable and requests their peer list.
+
+Discovered peers and their status (reachable/unreachable) are tracked in a SQLite database and periodically rechecked.
+
+Take a look at the [config.rs](src/config.rs) to fine tune the behavior according to your needs.
