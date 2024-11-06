@@ -5,7 +5,6 @@ use async_channel::{unbounded, Receiver, Sender};
 use chia_wallet_sdk::{connect_peer, Connector};
 use dashmap::DashSet;
 use futures_util::stream::{FuturesUnordered, StreamExt};
-use rand::seq::SliceRandom;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::time::{sleep, timeout};
 use tracing::{debug, info};
@@ -116,7 +115,7 @@ impl PeerProcessor {
             authority
                 .mark_peer_reachable(
                     peer_conn.socket_addr(),
-                    PEER_RECHECK_INTERVAL,
+                    PEER_REACHABLE_TTL,
                     previous_peer_status.clone(),
                 )
                 .await;
@@ -196,7 +195,9 @@ pub async fn start_peer_rechecker(
     loop {
         authority.cleanup_unreachable_peers();
 
-        let peers = authority.get_peers(true, 1000, None).await;
+        let peers = authority
+            .get_peers(true, PEER_RECHECK_BATCH_SIZE, None)
+            .await;
 
         let peers_len = peers.len();
         let processing_len = processor.processing.len();
@@ -207,11 +208,7 @@ pub async fn start_peer_rechecker(
             reachable_peer_count, peers_len, processing_len
         );
 
-        // add a nice chunk of random peers to the processing queue
         if processing_len < peers_len {
-            let mut peers: Vec<_> = peers.into_iter().collect();
-            peers.shuffle(&mut rand::thread_rng());
-
             for peer in peers.iter().take(peers_len - processing_len) {
                 processor.process(*peer);
             }
