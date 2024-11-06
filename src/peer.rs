@@ -165,7 +165,7 @@ pub async fn start_peer_rechecker(
         authority.cleanup_unreachable_peers();
 
         let peers = authority
-            .get_peers(true, PEER_RECHECK_BATCH_SIZE, None)
+            .get_expired_reachable_peers(PEER_RECHECK_BATCH_SIZE)
             .await;
 
         let reachable_peer_count = authority.get_reachable_peer_count();

@@ -58,33 +58,37 @@ impl PeerDiscoveryAuthority {
         }
     }
 
-    pub async fn get_peers(
-        &self,
-        only_expired: bool,
-        max_records: usize,
-        ip_version: Option<&str>,
-    ) -> Vec<SocketAddr> {
+    pub async fn get_peers(&self, max_records: usize, ip_version: Option<&str>) -> Vec<SocketAddr> {
         let conn = self.db_pool.get().unwrap();
 
-        let base_query = if only_expired {
-            "SELECT addr FROM peers WHERE is_reachable = 1 AND expires_at <= strftime('%s', 'now')"
-        } else {
-            "SELECT addr FROM peers WHERE is_reachable = 1"
+        let ip_filter = match ip_version {
+            Some("v4") => "AND addr NOT LIKE '%:%:%'",
+            Some("v6") => "AND addr LIKE '%:%:%'",
+            _ => "",
         };
 
-        let query = match ip_version {
-            Some("v4") => format!(
-                "{} AND addr NOT LIKE '%:%:%' ORDER BY RANDOM() LIMIT ?",
-                base_query
-            ),
-            Some("v6") => format!(
-                "{} AND addr LIKE '%:%:%' ORDER BY RANDOM() LIMIT ?",
-                base_query
-            ),
-            _ => format!("{} ORDER BY RANDOM() LIMIT ?", base_query),
-        };
+        let query = format!(
+            "SELECT addr FROM peers WHERE is_reachable = 1 {} ORDER BY RANDOM() LIMIT ?",
+            ip_filter
+        );
 
         let mut stmt = conn.prepare(&query).unwrap();
+
+        stmt.query_map([&max_records.to_string()], |row| {
+            Ok(row.get::<_, String>(0)?.parse().ok())
+        })
+        .unwrap()
+        .filter_map(Result::ok)
+        .flatten()
+        .collect()
+    }
+
+    pub async fn get_expired_reachable_peers(&self, max_records: usize) -> Vec<SocketAddr> {
+        let conn = self.db_pool.get().unwrap();
+
+        let mut stmt = conn
+            .prepare("SELECT addr FROM peers WHERE is_reachable = 1 AND expires_at <= strftime('%s', 'now') ORDER BY expires_at LIMIT ?")
+            .unwrap();
 
         let peers = stmt
             .query_map([&max_records.to_string()], |row| {
@@ -222,9 +226,7 @@ impl Authority for PeerDiscoveryAuthority {
             _ => None,
         };
 
-        let peers = self
-            .get_peers(false, MAX_RECORDS_TO_RETURN, ip_version)
-            .await;
+        let peers = self.get_peers(MAX_RECORDS_TO_RETURN, ip_version).await;
 
         let mut records = Vec::new();
 
