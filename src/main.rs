@@ -78,7 +78,7 @@ async fn main() -> anyhow::Result<()> {
 
     // DNS zone setup
     let zone_name = Name::parse(&opt.domain, None)?;
-    let authority = Arc::new(RandomizedAuthority::new(zone_name.clone()));
+    let authority = Arc::new(PeerDiscoveryAuthority::new(zone_name.clone()));
 
     let mut catalog = Catalog::new();
     catalog.upsert(zone_name.clone().into(), Box::new(authority.clone()));

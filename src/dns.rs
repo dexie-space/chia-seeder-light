@@ -1,13 +1,12 @@
 use crate::config::*;
 
-use rand::seq::SliceRandom;
-use std::collections::HashSet;
+use r2d2::Pool;
+use r2d2_sqlite::SqliteConnectionManager;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{sync::Mutex, time::Instant};
 use tokio::net::{TcpListener, UdpSocket};
-use tokio::sync::RwLock;
 use tracing::info;
 use trust_dns_server::authority::Catalog;
 use trust_dns_server::authority::{
@@ -21,76 +20,171 @@ use trust_dns_server::proto::rr::{LowerName, Name, RData, Record, RecordType};
 use trust_dns_server::server::RequestInfo;
 use trust_dns_server::ServerFuture;
 
-struct BlockedPeer {
-    addr: SocketAddr,
-    expires_at: Instant,
+#[derive(Debug, PartialEq, Clone)]
+pub enum PeerStatus {
+    Reachable,
+    Unreachable,
+    Unknown,
 }
 
-pub struct RandomizedAuthority {
-    peers: Arc<RwLock<HashSet<SocketAddr>>>,
+pub struct PeerDiscoveryAuthority {
     origin: LowerName,
-    blocked_peers: Arc<Mutex<Vec<BlockedPeer>>>,
+    db_pool: Pool<SqliteConnectionManager>,
 }
 
-impl RandomizedAuthority {
+impl PeerDiscoveryAuthority {
     pub fn new(origin: Name) -> Self {
+        let db_path = PathBuf::from("peers.db");
+        let manager = SqliteConnectionManager::file(&db_path);
+        let pool = Pool::new(manager).unwrap();
+
+        // Initialize the database
+        let conn = pool.get().unwrap();
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS peers (
+                addr TEXT PRIMARY KEY,
+                is_reachable INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL
+            )",
+            [],
+        )
+        .unwrap();
+
         Self {
-            peers: Arc::new(RwLock::new(HashSet::new())),
             origin: LowerName::new(&origin),
-            blocked_peers: Arc::new(Mutex::new(Vec::new())),
+            db_pool: pool,
         }
     }
 
-    pub async fn add_peer(&self, addr: SocketAddr) {
-        let mut peers = self.peers.write().await;
-        if peers.insert(addr) {
+    pub async fn get_peers(
+        &self,
+        only_expired: bool,
+        max_records: usize,
+        ip_version: Option<&str>,
+    ) -> Vec<SocketAddr> {
+        let conn = self.db_pool.get().unwrap();
+
+        let base_query = if only_expired {
+            "SELECT addr FROM peers WHERE is_reachable = 1 AND expires_at <= strftime('%s', 'now')"
+        } else {
+            "SELECT addr FROM peers WHERE is_reachable = 1"
+        };
+
+        let query = match ip_version {
+            Some("v4") => format!(
+                "{} AND addr NOT LIKE '%:%:%' ORDER BY RANDOM() LIMIT ?",
+                base_query
+            ),
+            Some("v6") => format!(
+                "{} AND addr LIKE '%:%:%' ORDER BY RANDOM() LIMIT ?",
+                base_query
+            ),
+            _ => format!("{} ORDER BY RANDOM() LIMIT ?", base_query),
+        };
+
+        let mut stmt = conn.prepare(&query).unwrap();
+
+        let peers = stmt
+            .query_map([&max_records.to_string()], |row| {
+                let addr_str: String = row.get(0)?;
+                Ok(addr_str.parse::<SocketAddr>().ok())
+            })
+            .unwrap()
+            .filter_map(Result::ok)
+            .flatten()
+            .collect();
+
+        peers
+    }
+
+    pub async fn mark_peer_reachable(
+        &self,
+        addr: SocketAddr,
+        duration: Duration,
+        previous_peer_status: PeerStatus,
+    ) {
+        let conn = self.db_pool.get().unwrap();
+        let duration_seconds = duration.as_secs();
+
+        conn.execute(
+            "INSERT OR REPLACE INTO peers (addr, is_reachable, expires_at)
+             VALUES (?1, 1, strftime('%s', 'now', ?2 || ' seconds'))",
+            [&addr.to_string(), &duration_seconds.to_string()],
+        )
+        .unwrap();
+
+        if previous_peer_status == PeerStatus::Unreachable
+            || previous_peer_status == PeerStatus::Unknown
+        {
             info!("Added reachable peer: {:?}", addr);
         }
     }
 
-    pub async fn remove_peer(&self, addr: SocketAddr) {
-        let mut peers = self.peers.write().await;
-        if peers.remove(&addr) {
-            info!("Removed unreachable peer: {:?}", addr);
+    pub async fn mark_peer_unreachable(
+        &self,
+        addr: SocketAddr,
+        duration: Duration,
+        previous_peer_status: PeerStatus,
+    ) {
+        let conn = self.db_pool.get().unwrap();
+        let duration_seconds = duration.as_secs();
+
+        conn.execute(
+            "INSERT OR REPLACE INTO peers (addr, is_reachable, expires_at)
+             VALUES (?1, 0, strftime('%s', 'now', ?2 || ' seconds'))",
+            [&addr.to_string(), &duration_seconds.to_string()],
+        )
+        .unwrap();
+
+        if previous_peer_status == PeerStatus::Reachable {
+            info!("Marked peer as unreachable: {:?}", addr);
         }
     }
 
-    pub async fn known_peer(&self, addr: &SocketAddr) -> bool {
-        self.peers.read().await.contains(addr)
+    pub async fn get_peer_status(&self, addr: &SocketAddr) -> PeerStatus {
+        let conn = self.db_pool.get().unwrap();
+
+        let result: Result<(i64, i64), _> = conn.query_row(
+            "SELECT is_reachable FROM peers
+             WHERE addr = ?1 AND expires_at > strftime('%s', 'now')",
+            [&addr.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        );
+
+        match result {
+            Ok((1, 0)) => PeerStatus::Reachable,
+            Ok((0, 1)) => PeerStatus::Unreachable,
+            _ => PeerStatus::Unknown,
+        }
     }
 
-    pub async fn get_peers(&self) -> Vec<SocketAddr> {
-        let peers = self.peers.read().await;
-        peers.iter().cloned().collect()
+    pub fn cleanup_unreachable_peers(&self) {
+        let conn = self.db_pool.get().unwrap();
+
+        conn.execute(
+            "DELETE FROM peers WHERE is_reachable = 0 AND expires_at <= strftime('%s', 'now')",
+            [],
+        )
+        .unwrap();
     }
 
-    pub async fn block_peer(&self, addr: SocketAddr, duration: Duration) {
-        self.remove_peer(addr).await;
+    pub fn get_reachable_peer_count(&self) -> usize {
+        let conn = self.db_pool.get().unwrap();
 
-        let mut blocked = self.blocked_peers.lock().unwrap();
-        blocked.retain(|peer| peer.addr != addr);
-        blocked.push(BlockedPeer {
-            addr,
-            expires_at: Instant::now() + duration,
-        });
-    }
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM peers WHERE is_reachable = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
 
-    pub fn is_blocked(&self, addr: &SocketAddr) -> bool {
-        let blocked = self.blocked_peers.lock().unwrap();
-        let now = Instant::now();
-        blocked
-            .iter()
-            .any(|peer| &peer.addr == addr && peer.expires_at > now)
-    }
-
-    pub fn cleanup_blocklist(&self) -> () {
-        let mut blocked = self.blocked_peers.lock().unwrap();
-        blocked.retain(|peer| peer.expires_at > Instant::now());
+        count as usize
     }
 }
 
 #[async_trait::async_trait]
-impl Authority for RandomizedAuthority {
+impl Authority for PeerDiscoveryAuthority {
     type Lookup = AuthLookup;
 
     fn zone_type(&self) -> ZoneType {
@@ -115,26 +209,19 @@ impl Authority for RandomizedAuthority {
             return Ok(AuthLookup::default());
         }
 
-        let peers = self.peers.read().await;
-        let mut filtered_peers: Vec<_> = match rtype {
-            RecordType::A => peers
-                .iter()
-                .filter(|&&addr| matches!(addr.ip(), std::net::IpAddr::V4(_)))
-                .collect(),
-            RecordType::AAAA => peers
-                .iter()
-                .filter(|&&addr| matches!(addr.ip(), std::net::IpAddr::V6(_)))
-                .collect(),
-            _ => Vec::new(), // empty for unsupported record types
+        let ip_version = match rtype {
+            RecordType::A => Some("v4"),
+            RecordType::AAAA => Some("v6"),
+            _ => None,
         };
 
-        // Shuffle the filtered peers
-        let mut rng = rand::thread_rng();
-        filtered_peers.shuffle(&mut rng);
+        let peers = self
+            .get_peers(false, MAX_RECORDS_TO_RETURN, ip_version)
+            .await;
 
         let mut records = Vec::new();
 
-        for &addr in filtered_peers.iter().take(MAX_RECORDS_TO_RETURN) {
+        for addr in peers {
             let record = match addr.ip() {
                 std::net::IpAddr::V4(ipv4) if matches!(rtype, RecordType::A | RecordType::ANY) => {
                     Some(Record::from_rdata(
@@ -220,7 +307,7 @@ pub async fn start_dns_server(
 
     Ok(tokio::spawn(async move {
         server.register_socket(udp_socket);
-        server.register_listener(tcp_listener, Duration::from_secs(PEER_TIMEOUT));
+        server.register_listener(tcp_listener, PEER_TIMEOUT);
         server.block_until_done().await.unwrap();
     }))
 }

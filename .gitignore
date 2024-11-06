@@ -2,3 +2,4 @@ debug/
 target/
 **/wallet.crt
 **/wallet.key
+**/peers.db
