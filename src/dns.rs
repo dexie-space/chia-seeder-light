@@ -24,6 +24,8 @@ use trust_dns_server::ServerFuture;
 pub enum PeerStatus {
     Reachable,
     Unreachable,
+    ReachableExpired,
+    UnreachableExpired,
     Unknown,
 }
 
@@ -113,7 +115,7 @@ impl PeerDiscoveryAuthority {
         )
         .unwrap();
 
-        if previous_peer_status == PeerStatus::Unreachable
+        if previous_peer_status == PeerStatus::UnreachableExpired
             || previous_peer_status == PeerStatus::Unknown
         {
             info!("Added reachable peer: {:?}", addr);
@@ -136,7 +138,7 @@ impl PeerDiscoveryAuthority {
         )
         .unwrap();
 
-        if previous_peer_status == PeerStatus::Reachable {
+        if previous_peer_status == PeerStatus::ReachableExpired {
             info!("Marked peer as unreachable: {:?}", addr);
         }
     }
@@ -145,16 +147,21 @@ impl PeerDiscoveryAuthority {
         let conn = self.db_pool.get().unwrap();
 
         let result: Result<(i64, i64), _> = conn.query_row(
-            "SELECT is_reachable FROM peers
-             WHERE addr = ?1 AND expires_at > strftime('%s', 'now')",
+            "SELECT is_reachable, CASE WHEN expires_at <= strftime('%s', 'now') THEN 1 ELSE 0 END AS is_expired
+             FROM peers WHERE addr = ?1",
             [&addr.to_string()],
             |row| Ok((row.get(0)?, row.get(1)?)),
         );
 
         match result {
-            Ok((1, 0)) => PeerStatus::Reachable,
-            Ok((0, 1)) => PeerStatus::Unreachable,
-            _ => PeerStatus::Unknown,
+            Ok((is_reachable, is_expired)) => match (is_reachable, is_expired) {
+                (1, 0) => PeerStatus::Reachable,
+                (0, 0) => PeerStatus::Unreachable,
+                (1, 1) => PeerStatus::ReachableExpired,
+                (0, 1) => PeerStatus::UnreachableExpired,
+                _ => PeerStatus::Unknown,
+            },
+            Err(_) => PeerStatus::Unknown,
         }
     }
 
