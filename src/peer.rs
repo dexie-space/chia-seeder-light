@@ -32,18 +32,6 @@ impl PeerProcessor {
             sender.clone(),
         ));
 
-        let processing_for_logging = processing.clone();
-        tokio::spawn(async move {
-            loop {
-                sleep(std::time::Duration::from_secs(10)).await;
-                let processing_len = processing_for_logging.len();
-
-                if processing_len > 0 {
-                    info!("Pending peers: {}", processing_len);
-                }
-            }
-        });
-
         Self { sender, processing }
     }
 
@@ -181,13 +169,12 @@ pub async fn start_peer_rechecker(
             .await;
 
         let reachable_peer_count = authority.get_reachable_peer_count();
+        let processing_len = processor.processing.len();
 
         info!(
-            "Starting periodic peer recheck, {} reachable peers",
-            reachable_peer_count,
+            "Starting periodic peer recheck, {} reachable peers, {} pending peers",
+            reachable_peer_count, processing_len
         );
-
-        let processing_len = processor.processing.len();
 
         if processing_len < PEER_RECHECK_BATCH_SIZE {
             for peer in expired_peers {
